@@ -404,7 +404,7 @@ int main()
     sf::SoundBuffer ambientBuf = makeAmbient();
 
     sf::Sound ambient(ambientBuf);
-    ambient.setLooping(true);
+    ambient.setLoop(true);
     ambient.setVolume(30.f);
     ambient.play();
     bool muted = false;
@@ -457,7 +457,7 @@ int main()
 
     auto getPcm = [&](int index) {
         if (index < static_cast<int>(ImagesPixels.size()) && !ImagesPixels[index].empty()) {
-            return generateSoundFromPixels(ImagesPixels[index]);
+            return generateSoundForSingleImage(ImagesPixels[index]);
         }
         return std::vector<std::int16_t>(static_cast<std::size_t>(DS_DUR * SAMPLE_RATE), 0);
     };
