@@ -446,7 +446,7 @@ int main()
 
         for (const char* ext : { ".png", ".jpg" })
         {
-            if (d.tex.loadFromFile("images/" + file + ext))
+            if (d.tex.loadFromFile("Data/" + file + ext))
             {
                 d.tex.setSmooth(true);
                 d.hasTex = true;
@@ -462,23 +462,28 @@ int main()
         return std::vector<std::int16_t>(static_cast<std::size_t>(DS_DUR * SAMPLE_RATE), 0);
     };
 
-    addDataset("Surface Temperature", "temperature",
-        "Polar cold: low, calm tone", "Temperate climate: steady tone", "Desert heat: high, bright tone",
+    addDataset("Surface Temperature (Frame 1)", "Image_1",
+        "Cold currents: low flow tone", "Moderate thermal flow: steady tone", "Warm thermal core: bright tone",
         col(40, 70, 200), col(230, 80, 50), getPcm(0));
-    addDataset("Global Rainfall", "rainfall",
-        "Dry land: sparse, slow drops", "Showers: steady rhythm", "Tropical storm: dense, fast rain",
+
+    addDataset("Surface Currents Velocity (Frame 2)", "Image_2",
+        "Calm eddies: slow rhythm", "Steady drift: balanced flow", "High-speed jet stream: rapid pulse",
         col(30, 50, 100), col(80, 130, 190), getPcm(1));
-    addDataset("Vegetation (Greenness)", "vegetation",
-        "Barren land: thin, quiet hum", "Grassland: soft, simple chord", "Rainforest: full, rich harmony",
+
+    addDataset("Thermal Gradient (Frame 3)", "Image_3",
+        "Deep cold trench: deep hum", "Shelf transition: soft chord", "Surface warm zone: rich harmony",
         col(20, 80, 40), col(90, 170, 60), getPcm(2));
-    addDataset("Earth at Night", "night_lights",
-        "Remote areas: dark, few notes", "Towns: gentle sparkle", "Megacity: bright, dense lights",
+
+    addDataset("Current Vorticity (Frame 4)", "Image_4",
+        "Laminar flow: dark notes", "Meandering current: gentle sparkle", "Cyclonic eddy: dense motion",
         col(5, 5, 25), col(30, 30, 80), getPcm(3));
-    addDataset("Ocean Waves", "ocean",
-        "Calm sea: slow, low swell", "Rolling waves: rising swell", "Storm surge: powerful wave",
+
+    addDataset("Coastal Upwelling (Frame 5)", "Image_5",
+        "Deep cold rise: slow swell", "Shelf interaction: rising swell", "Active nutrient surge: powerful wave",
         col(10, 50, 130), col(20, 140, 190), getPcm(4));
-    addDataset("Arctic Sea Ice", "sea_ice",
-        "Thin ice: faint, distant chimes", "Seasonal ice: clear, ringing bells", "Thick ice cap: bright, rich echo",
+
+    addDataset("Sea Surface Temperature Peak (Frame 6)", "Image_6",
+        "Thermal minimum: faint chimes", "Mean anomaly: ringing bells", "Maximum heat anomaly: rich echo",
         col(90, 140, 200), col(210, 235, 250), getPcm(5));
 
     std::vector<sf::Sound> dsSounds;
