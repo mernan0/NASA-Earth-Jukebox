@@ -114,6 +114,7 @@ void generateSound(const vector<vector<sf::Color>>& images, vector<sf::Int16>& s
             fade = min(fade, fadeOut);
         }
         float finalSample = soundData[i] * fade;
+
         finalSample = max(-1.0f, min(1.0f, finalSample));
         samples.push_back( static_cast<sf::Int16>(finalSample * 32767) );
     }
@@ -131,7 +132,7 @@ void playSound(const vector<sf::Int16>& samples) {
     }
     sf::Sound sound(soundBuffer);
     sound.play();
-    while (sound.getStatus() == sf::Sound::Playing) {
+    while (sound.getStatus() == sf::Sound::Status::Playing) {
         sf::sleep(sf::milliseconds(100));
     }
 }
@@ -150,7 +151,7 @@ static float rmsAt(const std::vector<std::int16_t>& s, std::size_t start, std::s
 }
 
 // ---------------------------------------------------------------
-// AUDIO BACKEND BRIDGE STUCTURE
+// AUDIO BACKEND BRIDGE STRUCTURE
 // ---------------------------------------------------------------
 struct PlaybackState
 {
@@ -425,7 +426,7 @@ int main()
 
     // FONT
     sf::Font font;
-    if (!font.loadFromFile("C:/Windows/Fonts/arial.ttf"))
+    if (!font.loadFromFile("Oduda-Bold-Demo.otf"))
     {
         std::cout << "Font loading failed!\n";
         return -1;
@@ -437,7 +438,7 @@ int main()
     vector < vector < sf::Color > > ImagesPixels;
     int indexCounter = 1;
     sf::Image image;
-    while(indexCounter < MAX_IMAGES)
+    while(indexCounter <= MAX_IMAGES)
     {
         string filePath = "Data/Image_" + to_string(indexCounter) + ".png";
         if (!image.loadFromFile(filePath)) {
@@ -543,9 +544,13 @@ int main()
     sf::Text title;
     title.setFont(font);
     title.setString("Space Walkie Talkie");
-    title.setCharacterSize(65);
+    title.setCharacterSize(78);
     title.setFillColor(sf::Color(95, 224, 208));
     centerText(title, W / 2.f, 230.f);
+
+    sf::Text titleShadow = title;
+    titleShadow.setFillColor(sf::Color(0, 0, 0, 150));
+    titleShadow.setPosition(title.getPosition().x + 2.f, title.getPosition().y + 2.f);
 
     sf::Text subtitle;
     subtitle.setFont(font);
@@ -663,8 +668,37 @@ int main()
                     {
                         if (selected >= 0)
                         {
-                            audio->stopAll();
-                            selected = -1;
+                            // Check clicks on the bottom thumbnail bar
+                            bool clickedThumb = false;
+                            int clickedIndex = -1;
+                            int n = static_cast<int>(datasets.size());
+                            float thumbW = 75.f, thumbH = 55.f, thumbGap = 12.f;
+                            float totalThumbW = n * thumbW + (n - 1) * thumbGap;
+                            float thumbStartX = (W - totalThumbW) / 2.f;
+                            float thumbY = 570.f;
+
+                            for (int i = 0; i < n; ++i)
+                            {
+                                sf::FloatRect thumbRect(thumbStartX + i * (thumbW + thumbGap), thumbY, thumbW, thumbH);
+                                if (thumbRect.contains(position))
+                                {
+                                    clickedThumb = true;
+                                    clickedIndex = i;
+                                    break;
+                                }
+                            }
+
+                            if (clickedThumb)
+                            {
+                                selected = clickedIndex;
+                                audio->toggleImage(selected);
+                                smooth[selected] = 0.f;
+                            }
+                            else
+                            {
+                                audio->stopAll();
+                                selected = -1;
+                            }
                         }
                         else
                         {
@@ -829,6 +863,7 @@ int main()
             if (!hasBgStart)
             {
                 centerText(title, W / 2.f, 230.f + 6.f * std::sin(t * 1.5f));
+                window.draw(titleShadow);
                 window.draw(title);
                 window.draw(subtitle);
             }
@@ -989,16 +1024,18 @@ int main()
                 dim.setFillColor(col(2, 10, 22, 240));
                 window.draw(dim);
 
-                sf::Text fn; fn.setFont(font); fn.setString(d.name); fn.setCharacterSize(34);
+                // Title
+                sf::Text fn; fn.setFont(font); fn.setString(d.name); fn.setCharacterSize(28);
                 fn.setFillColor(sf::Color(255, 220, 130));
-                centerText(fn, W / 2.f, 42.f);
+                centerText(fn, W / 2.f, 35.f);
                 window.draw(fn);
 
-                const float maxW = W - 120.f, maxH = 520.f;
+                // Compact Main Image Frame (maxH = 340.f leaves space for bottom bar)
+                const float maxW = W - 200.f, maxH = 340.f;
                 auto ts = d.tex.getSize();
                 float sc = std::min(maxW / static_cast<float>(ts.x), maxH / static_cast<float>(ts.y));
                 float iw = ts.x * sc, ih = ts.y * sc;
-                float ix = (W - iw) / 2.f, iy = 82.f + (maxH - ih) / 2.f;
+                float ix = (W - iw) / 2.f, iy = 70.f + (maxH - ih) / 2.f;
 
                 sf::Sprite big(d.tex);
                 big.setScale(sc, sc);
@@ -1012,13 +1049,57 @@ int main()
                 frame.setOutlineColor(col(95, 224, 208, 200));
                 window.draw(frame);
 
+                // Caption directly under image
                 std::string cap = d.desc.empty() ? std::string("No caption yet") : d.desc;
-                sf::Text fc; fc.setFont(font); fc.setString(wrapText(cap, font, 24, W - 240.f)); fc.setCharacterSize(24);
+                sf::Text fc; fc.setFont(font); fc.setString(wrapText(cap, font, 16, W - 240.f)); fc.setCharacterSize(16);
                 fc.setFillColor(col(210, 235, 240));
-                centerText(fc, W / 2.f, 655.f);
+                centerText(fc, W / 2.f, 465.f);
                 window.draw(fc);
 
-                hint.setString("Click anywhere or press ESC to close    M: mute");
+                // Waveform bars under caption
+                bool playing = pbs[selected].playing;
+                float a = smooth[selected];
+                const int nb = 28;
+                float baseY = 525.f;
+                float startX = W / 2.f - (nb * 11.f) / 2.f;
+                for (int b = 0; b < nb; ++b)
+                {
+                    float bh = 3.f;
+                    if (playing)
+                    {
+                        float v = (static_cast<std::size_t>(b) < pbs[selected].wave.size()) ? pbs[selected].wave[b] : a;
+                        bh = 3.f + 25.f * std::clamp(v, 0.f, 1.f);
+                    }
+                    sf::RectangleShape bar(sf::Vector2f(5.f, bh));
+                    bar.setOrigin(2.5f, bh / 2.f);
+                    bar.setPosition(startX + b * 11.f, baseY);
+                    bar.setFillColor(col(40 + b * 5, 200 - b * 4, 210, playing ? 220 : 90));
+                    window.draw(bar);
+                }
+
+                // Bottom Thumbnail Switcher Bar (Centered dynamically for all loaded images)
+                int n = static_cast<int>(datasets.size());
+                float thumbW = 75.f, thumbH = 55.f, thumbGap = 12.f;
+                float totalThumbW = n * thumbW + (n - 1) * thumbGap;
+                float thumbStartX = (W - totalThumbW) / 2.f;
+                float thumbY = 570.f;
+
+                for (int i = 0; i < n; ++i)
+                {
+                    bool isSelectedThumb = (i == selected);
+                    sf::FloatRect thumbRect(thumbStartX + i * (thumbW + thumbGap), thumbY, thumbW, thumbH);
+
+                    sf::RectangleShape thumbCard(sf::Vector2f(thumbW, thumbH));
+                    thumbCard.setPosition(thumbRect.left, thumbRect.top);
+                    thumbCard.setFillColor(col(20, 30, 45, 220));
+                    thumbCard.setOutlineThickness(isSelectedThumb ? 2.5f : 1.f);
+                    thumbCard.setOutlineColor(isSelectedThumb ? col(130, 255, 230, 255) : col(95, 224, 208, 100));
+                    window.draw(thumbCard);
+
+                    drawCover(window, datasets[i].tex, sf::Vector2f(thumbRect.left + 4.f, thumbRect.top + 4.f), sf::Vector2f(thumbW - 8.f, thumbH - 8.f));
+                }
+
+                hint.setString("Click bottom thumbnails to switch    ESC / Click background to close    M: mute");
             }
             else
             {
