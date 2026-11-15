@@ -7,18 +7,19 @@
 #include <cmath>
 #include <cstdint>
 #include <algorithm>
+#include <filesystem>
+#include <sstream>
+#include <cctype>
+#include <map>
 
+namespace fs = std::filesystem;
 using namespace std;
 
 constexpr float W = 1200.f;
 constexpr float H = 750.f;
-constexpr float PI = 3.14159265f;
-constexpr unsigned SAMPLE_RATE = 44100;
-constexpr float DS_DUR = 4.f;         // length of each dataset sound (seconds)
+constexpr int MAX_IMAGES = 6;
 
-// ---------------------------------------------------------------
-// Sound Teammate's Constants & Functions
-// ---------------------------------------------------------------
+const unsigned int SAMPLE_RATE = 44100;
 const float MIN_FREQUENCY = 220.0f;
 const float MAX_FREQUENCY = 880.0f;
 const float MIN_AMPLITUDE = 0.08f;
@@ -26,187 +27,113 @@ const float MAX_AMPLITUDE = 0.35f;
 const int MAX_PIXELS = 256;
 const float PIXEL_DURATION = 0.025f;
 
-static float normalizeValue(float value, float minValue, float maxValue) {
+// ---------------------------------------------------------------
+// SOUND FUNCTIONS
+// ---------------------------------------------------------------
+float normalizeValue(float value, float minValue, float maxValue) {
     if (maxValue <= minValue) return 0.0f;
     return (value - minValue) / (maxValue - minValue);
 }
 
-static float getBrightness(sf::Color pixel) {
+float getBrightness(sf::Color pixel) {
     return (0.299f * pixel.r + 0.587f * pixel.g + 0.114f * pixel.b);
 }
 
-static float getSaturation(sf::Color pixel) {
+float getSaturation(sf::Color pixel) {
     float maximum = max({pixel.r, pixel.g, pixel.b});
     float minimum = min({pixel.r, pixel.g, pixel.b});
     if (maximum == 0) return 0.0f;
     return (maximum - minimum) / maximum;
 }
 
-static float calculateFrequency(float brightness) {
+float calculateFrequency(float brightness) {
     float normalized = normalizeValue(brightness, 0.0f, 255.0f);
     return MIN_FREQUENCY + normalized * (MAX_FREQUENCY - MIN_FREQUENCY);
 }
 
-static float calculateAmplitude(float saturation) {
+float calculateAmplitude(float saturation) {
     return MIN_AMPLITUDE + saturation * (MAX_AMPLITUDE - MIN_AMPLITUDE);
 }
 
-static vector<sf::Color> reducePixels(const vector<sf::Color>& pixels) {
+vector<sf::Color> reducePixels(const vector<sf::Color>& pixels) {
     vector<sf::Color> reduced;
     if (pixels.empty()) return reduced;
-    int totalPixels = static_cast<int>(pixels.size());
+    int totalPixels = pixels.size();
     int newSize = min(totalPixels, MAX_PIXELS);
     for (int i = 0; i < newSize; i++) {
         int start = i * totalPixels / newSize;
         int end = (i + 1) * totalPixels / newSize;
-        int red = 0, green = 0, blue = 0;
+        int red = 0;
+        int green = 0;
+        int blue = 0;
         int count = end - start;
-        if (count <= 0) continue;
         for (int j = start; j < end; j++) {
             red += pixels[j].r;
             green += pixels[j].g;
             blue += pixels[j].b;
         }
-        reduced.push_back(sf::Color(red / count, green / count, blue / count));
+        reduced.push_back(sf::Color( red / count, green / count, blue / count ));
     }
     return reduced;
 }
 
-static vector<sf::Int16> generateSoundForSingleImage(const vector<sf::Color>& inputPixels) {
-    vector<sf::Int16> samples;
-    if (inputPixels.empty()) {
-        return vector<sf::Int16>(static_cast<std::size_t>(DS_DUR * SAMPLE_RATE), 0);
-    }
-
-    vector<sf::Color> pixels = reducePixels(inputPixels);
+void generateSound(const vector<vector<sf::Color>>& images, vector<sf::Int16>& samples) {
     vector<float> soundData;
     float previousFrequency = MIN_FREQUENCY;
     float previousAmplitude = MIN_AMPLITUDE;
     const int samplesPerPixel = static_cast<int>(SAMPLE_RATE * PIXEL_DURATION);
     float phase = 0.0f;
-
-    for (std::size_t j = 0; j < pixels.size(); j++) {
-        float brightness = getBrightness(pixels[j]);
-        float saturation = getSaturation(pixels[j]);
-        float frequency = calculateFrequency(brightness);
-        float amplitude = calculateAmplitude(saturation);
-        for (int k = 0; k < samplesPerPixel; k++) {
-            float progress = static_cast<float>(k) / samplesPerPixel;
-            float currentFrequency = previousFrequency + progress * (frequency - previousFrequency);
-            float currentAmplitude = previousAmplitude + progress * (amplitude - previousAmplitude);
-            float sample = currentAmplitude * sin(phase);
-            soundData.push_back(sample);
-            phase += 2.0f * PI * currentFrequency / SAMPLE_RATE;
-            if (phase >= 2.0f * PI) phase -= 2.0f * PI;
+    for (int i = 0; i < images.size(); i++) {
+        vector<sf::Color> pixels = reducePixels(images[i]);
+        for (int j = 0; j < pixels.size(); j++) {
+            float brightness = getBrightness(pixels[j]);
+            float saturation = getSaturation(pixels[j]);
+            float frequency = calculateFrequency(brightness);
+            float amplitude = calculateAmplitude(saturation);
+            for (int k = 0; k < samplesPerPixel; k++) {
+                float progress = static_cast<float>(k) / samplesPerPixel;
+                float currentFrequency = previousFrequency + progress * (frequency - previousFrequency);
+                float currentAmplitude = previousAmplitude + progress * (amplitude - previousAmplitude);
+                float sample = currentAmplitude * sin(phase);
+                soundData.push_back(sample);
+                phase += 2.0f * 3.14159265f * currentFrequency / SAMPLE_RATE;
+                if (phase >= 2.0f * 3.14159265f) phase -= 2.0f * 3.14159265f;
+            }
+            previousFrequency = frequency;
+            previousAmplitude = amplitude;
         }
-        previousFrequency = frequency;
-        previousAmplitude = amplitude;
     }
-
-    int fadeSamples = static_cast<int>(SAMPLE_RATE * 0.02f);
-    if (fadeSamples * 2 > static_cast<int>(soundData.size())) {
-        fadeSamples = static_cast<int>(soundData.size() / 4);
-    }
-    for (std::size_t i = 0; i < soundData.size(); i++) {
+    int fadeSamples = SAMPLE_RATE * 0.02f;
+    for (int i = 0; i < soundData.size(); i++) {
         float fade = 1.0f;
-        if (static_cast<int>(i) < fadeSamples) {
+        if (i < fadeSamples) {
             fade = static_cast<float>(i) / fadeSamples;
         }
-        if (static_cast<int>(i) >= static_cast<int>(soundData.size()) - fadeSamples) {
+        if (i >= soundData.size() - fadeSamples) {
             float fadeOut = static_cast<float>(soundData.size() - i) / fadeSamples;
             fade = min(fade, fadeOut);
         }
         float finalSample = soundData[i] * fade;
         finalSample = max(-1.0f, min(1.0f, finalSample));
-        samples.push_back(static_cast<sf::Int16>(finalSample * 32767));
+        samples.push_back( static_cast<sf::Int16>(finalSample * 32767) );
     }
-    return samples;
 }
 
-// ---------------------------------------------------------------
-// GUI Helpers (SFML 2.6.1 Syntax Updates)
-// ---------------------------------------------------------------
-static sf::Color col(int r, int g, int b, int a = 255)
-{
-    auto c = [](int v) { return static_cast<std::uint8_t>(std::clamp(v, 0, 255)); };
-    return sf::Color(c(r), c(g), c(b), c(a));
-}
-
-static void centerText(sf::Text& t, float x, float y)
-{
-    sf::FloatRect b = t.getLocalBounds();
-    t.setOrigin(b.left + b.width / 2.f, b.top + b.height / 2.f);
-    t.setPosition(x, y);
-}
-
-static float hsh(int i, int salt)
-{
-    float v = std::sin(i * 12.9898f + salt * 78.233f) * 43758.5453f;
-    return v - std::floor(v);
-}
-
-static std::mt19937 g_rng(1234);
-static float frand(float a, float b)
-{
-    return std::uniform_real_distribution<float>(a, b)(g_rng);
-}
-
-static sf::SoundBuffer makeBuffer(const std::vector<std::int16_t>& samples)
-{
-    sf::SoundBuffer buffer;
-    if (!buffer.loadFromSamples(samples.data(), samples.size(), 1, SAMPLE_RATE))
-    {
-        std::cout << "Failed to create sound buffer\n";
+void playSound(const vector<sf::Int16>& samples) {
+    if (samples.empty()) {
+        cout << "No sound data available!" << endl;
+        return;
     }
-    return buffer;
-}
-
-static sf::SoundBuffer makeNote(float freq, float duration)
-{
-    std::size_t n = static_cast<std::size_t>(duration * SAMPLE_RATE);
-    std::vector<std::int16_t> s(n);
-    for (std::size_t i = 0; i < n; ++i)
-    {
-        float t = static_cast<float>(i) / SAMPLE_RATE;
-        float env = std::exp(-3.5f * t / duration) * std::min(1.f, t * 200.f);
-        float v = std::sin(2.f * PI * freq * t)
-            + 0.4f * std::sin(2.f * PI * freq * 2.f * t)
-            + 0.15f * std::sin(2.f * PI * freq * 3.f * t);
-        s[i] = static_cast<std::int16_t>(v * env * 0.35f * 32767.f);
+    sf::SoundBuffer soundBuffer;
+    if (!soundBuffer.loadFromSamples( samples.data(), samples.size(), 1, SAMPLE_RATE)) {
+        cout << "Failed to create sound buffer!" << endl;
+        return;
     }
-    return makeBuffer(s);
-}
-
-static sf::SoundBuffer makeWhoosh(float duration)
-{
-    std::size_t n = static_cast<std::size_t>(duration * SAMPLE_RATE);
-    std::vector<std::int16_t> s(n);
-    float phase = 0.f;
-    for (std::size_t i = 0; i < n; ++i)
-    {
-        float t = static_cast<float>(i) / SAMPLE_RATE;
-        float freq = 1400.f - 1000.f * (t / duration);
-        phase += 2.f * PI * freq / SAMPLE_RATE;
-        float env = std::sin(PI * t / duration);
-        s[i] = static_cast<std::int16_t>(std::sin(phase) * env * 0.22f * 32767.f);
+    sf::Sound sound(soundBuffer);
+    sound.play();
+    while (sound.getStatus() == sf::Sound::Playing) {
+        sf::sleep(sf::milliseconds(100));
     }
-    return makeBuffer(s);
-}
-
-static sf::SoundBuffer makeAmbient()
-{
-    std::size_t n = static_cast<std::size_t>(4.f * SAMPLE_RATE);
-    std::vector<std::int16_t> s(n);
-    for (std::size_t i = 0; i < n; ++i)
-    {
-        float t = static_cast<float>(i) / SAMPLE_RATE;
-        float v = 0.5f * std::sin(2.f * PI * 55.f * t)
-            + 0.3f * std::sin(2.f * PI * 82.5f * t)
-            + 0.2f * std::sin(2.f * PI * 110.25f * t);
-        float trem = 0.75f + 0.25f * std::sin(2.f * PI * 0.5f * t);
-        s[i] = static_cast<std::int16_t>(v * trem * 0.4f * 32767.f);
-    }
-    return makeBuffer(s);
 }
 
 static float rmsAt(const std::vector<std::int16_t>& s, std::size_t start, std::size_t len)
@@ -222,167 +149,281 @@ static float rmsAt(const std::vector<std::int16_t>& s, std::size_t start, std::s
     return static_cast<float>(std::sqrt(sum / static_cast<double>(end - start)));
 }
 
-struct Star
+// ---------------------------------------------------------------
+// AUDIO BACKEND BRIDGE STUCTURE
+// ---------------------------------------------------------------
+struct PlaybackState
 {
-    float x, y, r, phase, twinkle, drift;
+    bool  playing = false;
+    float progress = 0.f;
+    float level = 0.f;
+    std::vector<float> wave;
 };
 
-struct Planet
+struct IAudioBackend
 {
-    float x, y, r, speed, tilt;
-    sf::Color color;
-    bool ring;
+    virtual ~IAudioBackend() = default;
+    virtual void toggleImage(std::size_t index) = 0;
+    virtual void stopAll() = 0;
+    virtual void setMuted(bool muted) = 0;
+    virtual void onUiEvent(const std::string& name) = 0;
+    virtual PlaybackState state(std::size_t index) = 0;
 };
 
-struct ShootingStar
+class SoundAudioBackend : public IAudioBackend
 {
-    sf::Vector2f pos, vel;
-    float life;
+private:
+    std::vector<sf::SoundBuffer> buffers;
+    std::vector<sf::Sound> sounds;
+    std::vector<std::vector<sf::Int16>> pcmData;
+    bool muted = false;
+    int playingIndex = -1;
+
+public:
+    SoundAudioBackend(const vector<vector<sf::Color>>& imagesPixels)
+    {
+        buffers.reserve(imagesPixels.size());
+        sounds.reserve(imagesPixels.size());
+        pcmData.reserve(imagesPixels.size());
+
+        for (const auto& imgPix : imagesPixels)
+        {
+            vector<vector<sf::Color>> singleWrap = { imgPix };
+            vector<sf::Int16> samples;
+            generateSound(singleWrap, samples);
+            pcmData.push_back(samples);
+
+            sf::SoundBuffer buf;
+            if (!samples.empty())
+            {
+                buf.loadFromSamples(samples.data(), samples.size(), 1, SAMPLE_RATE);
+            }
+            buffers.push_back(buf);
+            sounds.emplace_back(buffers.back());
+            sounds.back().setVolume(90.f);
+        }
+    }
+
+    void toggleImage(std::size_t index) override
+    {
+        stopAll();
+        if (index < sounds.size())
+        {
+            playingIndex = static_cast<int>(index);
+            sounds[index].setVolume(muted ? 0.f : 90.f);
+            sounds[index].play();
+        }
+    }
+
+    void stopAll() override
+    {
+        for (auto& sound : sounds)
+        {
+            sound.stop();
+        }
+        playingIndex = -1;
+    }
+
+    void setMuted(bool m) override
+    {
+        muted = m;
+        for (auto& sound : sounds)
+        {
+            sound.setVolume(muted ? 0.f : 90.f);
+        }
+    }
+
+    void onUiEvent(const std::string&) override {}
+
+    PlaybackState state(std::size_t index) override
+    {
+        PlaybackState st;
+        if (index < sounds.size())
+        {
+            st.playing = (sounds[index].getStatus() == sf::Sound::Playing);
+            if (st.playing)
+            {
+                float duration = static_cast<float>(pcmData[index].size()) / SAMPLE_RATE;
+                float offset = sounds[index].getPlayingOffset().asSeconds();
+                st.progress = (duration > 0.f) ? (offset / duration) : 0.f;
+
+                std::size_t off = static_cast<std::size_t>(offset * SAMPLE_RATE);
+                st.level = rmsAt(pcmData[index], off, 4096);
+
+                st.wave.clear();
+                for (int b = 0; b < 22; ++b)
+                {
+                    float v = rmsAt(pcmData[index], off + static_cast<std::size_t>(b) * 1100, 700);
+                    st.wave.push_back(std::clamp(v, 0.f, 1.f));
+                }
+            }
+        }
+        return st;
+    }
 };
 
-struct Pulse
+// ---------------------------------------------------------------
+// GUI HELPERS & SETUP
+// ---------------------------------------------------------------
+static sf::Color col(int r, int g, int b, int a = 255)
 {
-    sf::Vector2f pos;
-    float age;
-    sf::Color color;
-};
+    auto c = [](int v) { return static_cast<std::uint8_t>(std::clamp(v, 0, 255)); };
+    return sf::Color(c(r), c(g), c(b), c(a));
+}
+
+static void centerText(sf::Text& t, float x, float y)
+{
+    sf::FloatRect b = t.getLocalBounds();
+    t.setOrigin(b.left + b.width / 2.f, b.top + b.height / 2.f);
+    t.setPosition(x, y);
+}
+
+static void fitText(sf::Text& t, float maxW, unsigned minSize = 12)
+{
+    while (t.getLocalBounds().width > maxW && t.getCharacterSize() > minSize)
+        t.setCharacterSize(t.getCharacterSize() - 1);
+}
+
+static std::string wrapText(const std::string& s, const sf::Font& font, unsigned size, float maxW)
+{
+    std::string out, line, word;
+    std::istringstream iss(s);
+    while (iss >> word)
+    {
+        std::string test = line.empty() ? word : line + " " + word;
+        sf::Text t(test, font, size);
+        if (t.getLocalBounds().width > maxW && !line.empty())
+        {
+            out += line + "\n";
+            line = word;
+        }
+        else
+        {
+            line = test;
+        }
+    }
+    out += line;
+    return out;
+}
+
+static void drawCover(sf::RenderWindow& window, const sf::Texture& tex, sf::Vector2f pos, sf::Vector2f size)
+{
+    auto ts = tex.getSize();
+    float ta = static_cast<float>(ts.x) / static_cast<float>(ts.y);
+    float ba = size.x / size.y;
+    int tw = static_cast<int>(ts.x), th = static_cast<int>(ts.y), ox = 0, oy = 0;
+    if (ta > ba) { tw = static_cast<int>(ts.y * ba); ox = (static_cast<int>(ts.x) - tw) / 2; }
+    else { th = static_cast<int>(ts.x / ba); oy = (static_cast<int>(ts.y) - th) / 2; }
+
+    sf::Sprite spr(tex);
+    spr.setTextureRect(sf::IntRect(ox, oy, tw, th));
+    spr.setPosition(pos);
+    spr.setScale(size.x / static_cast<float>(tw), size.y / static_cast<float>(th));
+    window.draw(spr);
+}
+
+static std::string lower(std::string s)
+{
+    std::transform(s.begin(), s.end(), s.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+static std::string prettyName(const std::string& stem)
+{
+    std::string out = stem;
+    bool newWord = true;
+    for (char& c : out)
+    {
+        if (c == '_' || c == '-') c = ' ';
+        if (newWord && std::isalpha(static_cast<unsigned char>(c)))
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        newWord = (c == ' ');
+    }
+    return out;
+}
+
+static sf::Color tempColor(float v, int a)
+{
+    struct Stop { float p; int r, g, b; };
+    static const Stop st[] = { { 0.f, 25, 80, 220 },{ 0.3f, 30, 200, 170 },{ 0.55f, 120, 230, 70 },
+                             { 0.8f, 250, 210, 60 },{ 1.f, 255, 120, 40 } };
+    v = std::clamp(v, 0.f, 1.f);
+    for (int i = 0; i < 4; ++i)
+        if (v <= st[i + 1].p)
+        {
+            float f = (v - st[i].p) / (st[i + 1].p - st[i].p);
+            return col(int(st[i].r + (st[i + 1].r - st[i].r) * f),
+                int(st[i].g + (st[i + 1].g - st[i].g) * f),
+                int(st[i].b + (st[i + 1].b - st[i].b) * f), a);
+        }
+    return col(255, 120, 40, a);
+}
+
+struct ImageInfo { const char* name; const char* caption; };
+
+static const std::map<std::string, ImageInfo>& imageInfoMap()
+{
+    static const std::map<std::string, ImageInfo> info = {
+        { "image_1",{ "Ocean Currents", "A full-resolution map of ocean currents from the ECCO2 model. White dots mark where the model sets the current direction; values in between are interpolated." } },
+        { "image_2",{ "Water Flows", "A cropped region of the Pacific showing the real flow data points (white dots) against the flow curves. Directions between the dots are interpolated." } },
+        { "image_3",{ "Surface Eddies", "A cropped region of the Atlantic with the same flow data points. The bright spot near the center comes from a corner of the cube-sphere grid the data uses." } },
+        { "image_4",{ "Heat Map", "Sea surface currents and temperatures across the world's oceans, cropped and diced for a 5x3 hyperwall display." } },
+        { "image_5",{ "Ocean Motion", "Sea surface currents shown as flowing curves, colored by temperature." } },
+        { "image_6",{ "Atlantic Current", "Sea surface currents of the northern Atlantic Ocean, produced for a 5x3 hyperwall." } }
+    };
+    return info;
+}
+
+static const std::vector<ImageInfo>& imageInfoOrder()
+{
+    static const std::vector<ImageInfo> order = []
+        {
+            std::vector<ImageInfo> v;
+            for (const auto& kv : imageInfoMap()) v.push_back(kv.second);
+            return v;
+        }();
+    return order;
+}
+
+static bool loadBackground(const std::string& stem, sf::Texture& tex)
+{
+    const char* dirs[] = { "assets", "../assets", "../../assets", "../../../assets" };
+    const char* exts[] = { ".jpg", ".jpeg", ".png" };
+    for (const char* d : dirs)
+        for (const char* e : exts)
+        {
+            fs::path p = fs::path(d) / (stem + e);
+            std::error_code ec;
+            if (fs::is_regular_file(p, ec) && tex.loadFromFile(p.string()))
+            {
+                tex.setSmooth(true);
+                return true;
+            }
+        }
+    return false;
+}
+
+struct FlowP { float x, y, age, life, tv; };
+struct Plankton { float x, y, r, phase, twinkle, drift; };
 
 struct Dataset
 {
     std::string name;
-    std::string file;
-    std::string caps[3];
-    sf::Color c1, c2;
-    std::vector<std::int16_t> pcm;
-    float norm = 1.f;
-    sf::SoundBuffer buf;
+    std::string fileName;
+    std::string desc;
     sf::Texture tex;
-    bool hasTex = false;
 };
-
-static void drawThumb(sf::RenderTarget& rt, int kind, float x, float y, float w, float h,
-    sf::Color c1, sf::Color c2, float t)
-{
-    sf::VertexArray g(sf::TriangleStrip, 4);
-    g[0].position = sf::Vector2f(x, y);          g[0].color = c1;
-    g[1].position = sf::Vector2f(x + w, y);      g[1].color = c1;
-    g[2].position = sf::Vector2f(x, y + h);      g[2].color = c2;
-    g[3].position = sf::Vector2f(x + w, y + h);  g[3].color = c2;
-    rt.draw(g);
-
-    sf::CircleShape c(1.f, 24);
-    switch (kind)
-    {
-    case 0:
-        for (int i = 0; i < 6; ++i)
-        {
-            float r = 10.f + 10.f * hsh(i, 1);
-            c.setRadius(r);
-            c.setOrigin(r, r);
-            c.setPosition(x + w * (0.1f + 0.8f * hsh(i, 2)) + 6.f * std::sin(t + i),
-                          y + h * (0.2f + 0.6f * hsh(i, 3)));
-            c.setFillColor(col(255, 200, 80, 90));
-            rt.draw(c);
-        }
-        break;
-    case 1:
-    {
-        sf::RectangleShape drop(sf::Vector2f(1.5f, 12.f));
-        drop.setFillColor(col(200, 225, 255, 150));
-        for (int i = 0; i < 36; ++i)
-        {
-            float py = std::fmod(hsh(i, 2) * h + t * (90.f + 60.f * hsh(i, 3)), h - 12.f);
-            drop.setPosition(x + w * hsh(i, 1), y + py);
-            rt.draw(drop);
-        }
-        break;
-    }
-    case 2:
-        for (int i = 0; i < 28; ++i)
-        {
-            float r = (4.f + 7.f * hsh(i, 1)) * (1.f + 0.1f * std::sin(t * 2.f + i));
-            c.setRadius(r);
-            c.setOrigin(r, r);
-            c.setPosition(x + w * (0.05f + 0.9f * hsh(i, 2)), y + h * (0.15f + 0.7f * hsh(i, 3)));
-            c.setFillColor(col(60 + int(80 * hsh(i, 4)), 150 + int(80 * hsh(i, 5)), 60, 130));
-            rt.draw(c);
-        }
-        break;
-    case 3:
-        for (int i = 0; i < 70; ++i)
-        {
-            float r = 1.f + 1.5f * hsh(i, 1);
-            float a = 0.5f + 0.5f * std::sin(t * (1.f + 2.f * hsh(i, 4)) + i);
-            c.setRadius(r);
-            c.setOrigin(r, r);
-            c.setPosition(x + 4.f + (w - 8.f) * hsh(i, 2), y + 4.f + (h - 8.f) * hsh(i, 3));
-            c.setFillColor(col(255, 225, 140, int(80 + 175 * a)));
-            rt.draw(c);
-        }
-        break;
-    case 4:
-        for (int j = 0; j < 6; ++j)
-        {
-            sf::VertexArray wave(sf::LineStrip);
-            for (int k = 0; k <= 40; ++k)
-            {
-                sf::Vertex v;
-                v.position = sf::Vector2f(x + w * k / 40.f,
-                                          y + h * (0.2f + 0.12f * j) + 7.f * std::sin(k * 0.5f + t * 2.f + j));
-                v.color = col(255, 255, 255, 110);
-                wave.append(v);
-            }
-            rt.draw(wave);
-        }
-        break;
-    case 5:
-        c.setPointCount(6);
-        for (int i = 0; i < 12; ++i)
-        {
-            float r = 8.f + 12.f * hsh(i, 1);
-            c.setRadius(r);
-            c.setOrigin(r, r);
-            c.setPosition(x + w * (0.12f + 0.76f * hsh(i, 2)), y + h * (0.22f + 0.56f * hsh(i, 3)));
-            c.setRotation(t * 10.f + i * 17.f);
-            c.setFillColor(col(255, 255, 255, 100));
-            rt.draw(c);
-        }
-        break;
-    }
-}
 
 enum class Screen { Start, Workspace, Gallery };
 
 int main()
 {
-    // ---------------- Your Data Input Section ----------------
-    vector<vector<sf::Color>> ImagesPixels;
-    int imgIdx = 1;
-    sf::Image image;
-    while(imgIdx < 7){
-        string filePath = "Data/Image_" + to_string(imgIdx) + ".png";
-        if (image.loadFromFile(filePath)) {
-            unsigned int width = image.getSize().x;
-            unsigned int height = image.getSize().y;
-            vector<sf::Color> tempPixels;
-            tempPixels.reserve(width * height);
-            for (unsigned int y = 0 ; y < height ; ++y) {
-                for (unsigned int x = 0 ; x < width ; ++x) {
-                    tempPixels.push_back(image.getPixel(x, y));
-                }
-            }
-            ImagesPixels.push_back(tempPixels);
-        } else {
-            ImagesPixels.push_back({}); // Empty fallback if image missing
-        }
-        imgIdx++;
-    }
-
-    // Create Window (SFML 2.6.1 VideoMode format)
+    // WINDOW
     sf::RenderWindow window(sf::VideoMode(1200u, 750u), "Space Walkie Talkie");
     window.setFramerateLimit(60);
 
-    // Font (SFML 2 loadFromFile)
+    // FONT
     sf::Font font;
     if (!font.loadFromFile("C:/Windows/Fonts/arial.ttf"))
     {
@@ -390,136 +431,104 @@ int main()
         return -1;
     }
 
-    // ---------------- Audio ----------------
-    const float noteFreqs[5] = { 523.25f, 587.33f, 659.25f, 783.99f, 880.00f };
-    const sf::Color noteColors[5] = {
-        col(120, 230, 255), col(160, 140, 255), col(255, 160, 220),
-        col(255, 220, 130), col(130, 255, 190)
-    };
-
-    std::vector<sf::SoundBuffer> notes;
-    for (float f : noteFreqs) notes.push_back(makeNote(f, 1.2f));
-
-    sf::SoundBuffer whooshBuf = makeWhoosh(0.9f);
-    sf::SoundBuffer ambientBuf = makeAmbient();
-
-    sf::Sound ambient(ambientBuf);
-    ambient.setLoop(true);
-    ambient.setVolume(30.f);
-    ambient.play();
-    bool muted = false;
-
-    std::vector<sf::Sound> pool(8, sf::Sound(notes[0]));
-    std::size_t poolIndex = 0;
-
-    auto playSound = [&](const sf::SoundBuffer& buf, float pitch, float volume)
+    // ---------------------------------------------------------------
+    // DATA INPUT
+    // ---------------------------------------------------------------
+    vector < vector < sf::Color > > ImagesPixels;
+    int indexCounter = 1;
+    sf::Image image;
+    while(indexCounter < MAX_IMAGES)
     {
-        sf::Sound& s = pool[poolIndex];
-        poolIndex = (poolIndex + 1) % pool.size();
-        s.setBuffer(buf);
-        s.setPitch(pitch);
-        s.setVolume(muted ? 0.f : volume);
-        s.play();
-    };
-
-    // ---------------- NASA datasets (Connected to your ImagesPixels) ----------------
-    std::vector<Dataset> datasets;
-    datasets.reserve(6);
-
-    auto addDataset = [&](const std::string& name, const std::string& file,
-        const std::string& c0, const std::string& c1s, const std::string& c2s,
-        sf::Color top, sf::Color bottom, std::vector<std::int16_t> pcm)
-    {
-        datasets.emplace_back();
-        Dataset& d = datasets.back();
-        d.name = name;
-        d.file = file;
-        d.caps[0] = c0; d.caps[1] = c1s; d.caps[2] = c2s;
-        d.c1 = top; d.c2 = bottom;
-        d.pcm = std::move(pcm);
-        d.buf = makeBuffer(d.pcm);
-
-        float peak = 0.001f;
-        for (std::size_t idx = 0; idx < d.pcm.size(); idx += 2048)
-            peak = std::max(peak, rmsAt(d.pcm, idx, 4096));
-        d.norm = 1.f / (peak * 0.85f);
-
-        for (const char* ext : { ".png", ".jpg" })
-        {
-            if (d.tex.loadFromFile("Data/" + file + ext))
-            {
-                d.tex.setSmooth(true);
-                d.hasTex = true;
-                break;
+        string filePath = "Data/Image_" + to_string(indexCounter) + ".png";
+        if (!image.loadFromFile(filePath)) {
+            filePath = "Data/Image_" + to_string(indexCounter) + ".jpg";
+            if (!image.loadFromFile(filePath)) {
+                indexCounter++;
+                continue;
             }
         }
-    };
-
-    auto getPcm = [&](int index) {
-        if (index < static_cast<int>(ImagesPixels.size()) && !ImagesPixels[index].empty()) {
-            return generateSoundForSingleImage(ImagesPixels[index]);
+        unsigned int width = image.getSize().x;
+        unsigned int height = image.getSize().y;
+        vector < sf::Color> tempPixels;
+        tempPixels.reserve(width * height);
+        for (unsigned int y = 0 ; y < height ; ++y) {
+            for (unsigned int x = 0 ; x < width ; ++x) {
+                tempPixels.push_back(image.getPixel(x, y));
+            }
         }
-        return std::vector<std::int16_t>(static_cast<std::size_t>(DS_DUR * SAMPLE_RATE), 0);
-    };
-
-    addDataset("Surface Temperature (Frame 1)", "Image_1",
-        "Cold currents: low flow tone", "Moderate thermal flow: steady tone", "Warm thermal core: bright tone",
-        col(40, 70, 200), col(230, 80, 50), getPcm(0));
-
-    addDataset("Surface Currents Velocity (Frame 2)", "Image_2",
-        "Calm eddies: slow rhythm", "Steady drift: balanced flow", "High-speed jet stream: rapid pulse",
-        col(30, 50, 100), col(80, 130, 190), getPcm(1));
-
-    addDataset("Thermal Gradient (Frame 3)", "Image_3",
-        "Deep cold trench: deep hum", "Shelf transition: soft chord", "Surface warm zone: rich harmony",
-        col(20, 80, 40), col(90, 170, 60), getPcm(2));
-
-    addDataset("Current Vorticity (Frame 4)", "Image_4",
-        "Laminar flow: dark notes", "Meandering current: gentle sparkle", "Cyclonic eddy: dense motion",
-        col(5, 5, 25), col(30, 30, 80), getPcm(3));
-
-    addDataset("Coastal Upwelling (Frame 5)", "Image_5",
-        "Deep cold rise: slow swell", "Shelf interaction: rising swell", "Active nutrient surge: powerful wave",
-        col(10, 50, 130), col(20, 140, 190), getPcm(4));
-
-    addDataset("Sea Surface Temperature Peak (Frame 6)", "Image_6",
-        "Thermal minimum: faint chimes", "Mean anomaly: ringing bells", "Maximum heat anomaly: rich echo",
-        col(90, 140, 200), col(210, 235, 250), getPcm(5));
-
-    std::vector<sf::Sound> dsSounds;
-    dsSounds.reserve(datasets.size());
-    for (auto& d : datasets)
-    {
-        dsSounds.emplace_back(d.buf);
-        dsSounds.back().setVolume(90.f);
+        ImagesPixels.push_back(tempPixels);
+        indexCounter++;
     }
+
+    // BACKEND INITIALIZATION
+    SoundAudioBackend soundBackend(ImagesPixels);
+    IAudioBackend* audio = &soundBackend;
+    bool muted = false;
+
+    // LOADING DATASETS
+    std::vector<Dataset> datasets;
+    for (size_t idx = 0; idx < ImagesPixels.size(); ++idx)
+    {
+        int fileIdx = static_cast<int>(idx + 1);
+        string fileNameStr = "image_" + to_string(fileIdx);
+
+        Dataset d;
+        d.fileName = "Image_" + to_string(fileIdx) + ".png";
+        d.name = prettyName(fileNameStr);
+
+        auto it = imageInfoMap().find(fileNameStr);
+        if (it != imageInfoMap().end())
+        {
+            d.name = it->second.name;
+            d.desc = it->second.caption;
+        }
+
+        string path = "Data/Image_" + to_string(fileIdx) + ".png";
+        sf::Image tempImg;
+        if (!tempImg.loadFromFile(path)) {
+            path = "Data/Image_" + to_string(fileIdx) + ".jpg";
+            tempImg.loadFromFile(path);
+        }
+        d.tex.loadFromImage(tempImg);
+        d.tex.setSmooth(true);
+
+        datasets.push_back(d);
+    }
+
+    // BACKGROUND
+    sf::Texture bgStartTex, bgWelcomeTex;
+    bool hasBgStart = loadBackground("bg_start", bgStartTex);
+    bool hasBgWelcome = loadBackground("bg_welcome", bgWelcomeTex);
+
+    std::vector<PlaybackState> pbs(datasets.size());
     std::vector<float> smooth(datasets.size(), 0.f);
+    int selected = -1;
 
-    auto stopAllDataSounds = [&]()
-    {
-        for (auto& s : dsSounds) s.stop();
-    };
+    // RANDOM
+    std::mt19937 rng(std::random_device{}());
+    auto rnd = [&](float a, float b)
+        {
+            return std::uniform_real_distribution<float>(a, b)(rng);
+        };
 
-    // ---------------- Scene data ----------------
-    std::vector<Star> stars;
-    for (int idx = 0; idx < 170; ++idx)
-    {
-        stars.push_back({ frand(0, W), frand(0, H), frand(0.8f, 2.4f),
-                          frand(0, 6.28f), frand(1.f, 3.f), frand(2.f, 12.f) });
-    }
+    // OCEAN SCENE DATA
+    std::vector<Plankton> plankton;
+    for (int i = 0; i < 120; ++i)
+        plankton.push_back({ rnd(0, W), rnd(0, H), rnd(0.8f, 2.2f), rnd(0, 6.28f), rnd(1.f, 3.f), rnd(4.f, 16.f) });
 
-    std::vector<Planet> planets = {
-        { 1000.f, 130.f, 48.f, 8.f,  -20.f, col(210, 120, 90),  false },
-        { 180.f,  610.f, 70.f, 5.f,  -15.f, col(120, 150, 225), true },
-        { 930.f,  620.f, 26.f, 12.f,   0.f, col(235, 205, 125), false }
-    };
+    sf::RenderTexture flowRT;
+    flowRT.create(1200, 750);
+    flowRT.clear(sf::Color::Black);
+    flowRT.display();
+    std::vector<FlowP> fp(1500);
+    auto respawn = [&](FlowP& p)
+        {
+            p.x = rnd(0, W); p.y = rnd(0, H);
+            p.age = 0.f; p.life = rnd(2.f, 6.f); p.tv = rnd(-0.15f, 0.15f);
+        };
+    for (auto& p : fp) { respawn(p); p.age = rnd(0.f, p.life); }
+    sf::VertexArray flowLines(sf::Lines);
 
-    std::vector<ShootingStar> shooting;
-    std::vector<Pulse> pulses;
-
-    float shootTimer = frand(1.5f, 3.f);
-    float pulseTimer = frand(0.6f, 1.2f);
-    float satAngle = 0.f;
     float t = 0.f;
 
     sf::VertexArray bg(sf::TriangleStrip, 4);
@@ -530,56 +539,43 @@ int main()
 
     sf::CircleShape dot(1.f, 24);
 
+    // START SCREEN UI
     sf::Text title;
     title.setFont(font);
     title.setString("Space Walkie Talkie");
     title.setCharacterSize(65);
-    title.setFillColor(sf::Color(90, 220, 220));
+    title.setFillColor(sf::Color(95, 224, 208));
     centerText(title, W / 2.f, 230.f);
 
     sf::Text subtitle;
     subtitle.setFont(font);
     subtitle.setString("Turn Earth's Data Into Sound");
     subtitle.setCharacterSize(24);
-    subtitle.setFillColor(sf::Color(190, 200, 220));
+    subtitle.setFillColor(sf::Color(200, 225, 232));
     centerText(subtitle, W / 2.f, 320.f);
 
-    sf::RectangleShape startButton(sf::Vector2f(260.f, 70.f));
-    startButton.setOrigin(130.f, 35.f);
-    startButton.setPosition(W / 2.f, 450.f);
+    const float startBtnY = hasBgStart ? H / 2.f : 450.f;
+    sf::RectangleShape startButton(sf::Vector2f(260.f, 80.f));
+    startButton.setOrigin(130.f, 40.f);
+    startButton.setPosition(W / 2.f, startBtnY);
     startButton.setFillColor(sf::Color(20, 145, 160));
     startButton.setOutlineThickness(2.f);
     startButton.setOutlineColor(sf::Color(150, 240, 245, 160));
 
     sf::Text buttonText;
     buttonText.setFont(font);
-    buttonText.setString("START EXPLORING");
-    buttonText.setCharacterSize(20);
+    buttonText.setString("START");
+    buttonText.setCharacterSize(32);
     buttonText.setFillColor(sf::Color::White);
-    centerText(buttonText, W / 2.f, 450.f);
+    centerText(buttonText, W / 2.f, startBtnY);
 
+    // WELCOME UI
     sf::Text welcome;
     welcome.setFont(font);
     welcome.setString("WELCOME TO YOUR WORKSPACE");
     welcome.setCharacterSize(38);
     welcome.setFillColor(sf::Color::White);
     centerText(welcome, W / 2.f, 95.f);
-
-    const char* lines[3] = {
-        "Space Walkie Talkie turns NASA's Earth data into sound.",
-        "Temperature, rainfall, vegetation and light become tones and rhythms,",
-        "so blind and visually impaired explorers can hear our planet."
-    };
-    sf::Text para1, para2, para3;
-    para1.setFont(font); para1.setString(lines[0]); para1.setCharacterSize(24);
-    para2.setFont(font); para2.setString(lines[1]); para2.setCharacterSize(22);
-    para3.setFont(font); para3.setString(lines[2]); para3.setCharacterSize(22);
-    para1.setFillColor(sf::Color(90, 220, 220));
-    para2.setFillColor(sf::Color(200, 210, 230));
-    para3.setFillColor(sf::Color(200, 210, 230));
-    centerText(para1, W / 2.f, 175.f);
-    centerText(para2, W / 2.f, 215.f);
-    centerText(para3, W / 2.f, 247.f);
 
     const float cardCX = W / 2.f;
     const float cardCY = 560.f;
@@ -589,23 +585,31 @@ int main()
     hint.setFont(font);
     hint.setString("ESC: back    M: mute");
     hint.setCharacterSize(16);
-    hint.setFillColor(sf::Color(150, 160, 180));
-    centerText(hint, W / 2.f, 715.f);
+    hint.setFillColor(sf::Color(160, 180, 195));
+    centerText(hint, W / 2.f, 722.f);
 
     auto nasaCardRect = [&]()
-    {
-        return sf::FloatRect(cardCX - cardSize.x / 2.f, cardCY - cardSize.y / 2.f, cardSize.x, cardSize.y);
-    };
-    auto galleryRect = [&](int idx)
-    {
-        int c = idx % 3, r = idx / 3;
-        return sf::FloatRect(60.f + c * 370.f, 105.f + r * 295.f, 340.f, 280.f);
-    };
+        {
+            return sf::FloatRect(cardCX - cardSize.x / 2.f, cardCY - cardSize.y / 2.f, cardSize.x, cardSize.y);
+        };
+
+    // GALLERY LAYOUT
+    const float CARD_W = 265.f, CARD_H = 285.f, GAP = 25.f;
+    auto galleryRect = [&](int i)
+        {
+            int n = static_cast<int>(datasets.size());
+            int perRow = 4;
+            int row = i / perRow, c = i % perRow;
+            int inRow = (row == 0) ? std::min(perRow, n) : n - perRow;
+            float totalW = inRow * CARD_W + (inRow - 1) * GAP;
+            float startX = (W - totalW) / 2.f;
+            return sf::FloatRect(startX + c * (CARD_W + GAP), 100.f + row * 300.f, CARD_W, CARD_H);
+        };
 
     Screen screen = Screen::Start;
     sf::Clock clock;
 
-    // ---------------- Main Loop ----------------
+    // MAIN LOOP
     while (window.isOpen())
     {
         float dt = std::min(clock.restart().asSeconds(), 0.05f);
@@ -616,6 +620,7 @@ int main()
         {
             if (event.type == sf::Event::Closed)
             {
+                audio->stopAll();
                 window.close();
             }
 
@@ -623,14 +628,14 @@ int main()
             {
                 if (event.key.code == sf::Keyboard::Escape)
                 {
-                    if (screen == Screen::Gallery) { stopAllDataSounds(); screen = Screen::Workspace; }
+                    if (screen == Screen::Gallery && selected >= 0) { audio->stopAll(); selected = -1; }
+                    else if (screen == Screen::Gallery) { audio->stopAll(); screen = Screen::Workspace; }
                     else if (screen == Screen::Workspace) { screen = Screen::Start; }
                 }
                 if (event.key.code == sf::Keyboard::M)
                 {
                     muted = !muted;
-                    ambient.setVolume(muted ? 0.f : 30.f);
-                    for (auto& s : dsSounds) s.setVolume(muted ? 0.f : 90.f);
+                    audio->setMuted(muted);
                 }
             }
 
@@ -638,35 +643,40 @@ int main()
             {
                 if (event.mouseButton.button == sf::Mouse::Left)
                 {
-                    sf::Vector2f position(
-                        static_cast<float>(event.mouseButton.x),
-                        static_cast<float>(event.mouseButton.y)
-                    );
+                    sf::Vector2f position(static_cast<float>(event.mouseButton.x),
+                        static_cast<float>(event.mouseButton.y));
 
                     if (screen == Screen::Start && startButton.getGlobalBounds().contains(position))
                     {
                         screen = Screen::Workspace;
-                        playSound(notes[4], 1.f, 70.f);
-                        playSound(notes[2], 1.f, 60.f);
+                        audio->onUiEvent("start");
                     }
                     else if (screen == Screen::Workspace)
                     {
                         if (nasaCardRect().contains(position))
                         {
-                            playSound(notes[3], 1.f, 60.f);
+                            audio->onUiEvent("open_gallery");
                             screen = Screen::Gallery;
                         }
                     }
                     else if (screen == Screen::Gallery)
                     {
-                        for (std::size_t idx = 0; idx < datasets.size(); ++idx)
+                        if (selected >= 0)
                         {
-                            if (galleryRect(static_cast<int>(idx)).contains(position))
+                            audio->stopAll();
+                            selected = -1;
+                        }
+                        else
+                        {
+                            for (std::size_t i = 0; i < datasets.size(); ++i)
                             {
-                                stopAllDataSounds();
-                                dsSounds[idx].setVolume(muted ? 0.f : 90.f);
-                                dsSounds[idx].play();
-                                smooth[idx] = 0.f;
+                                if (galleryRect(static_cast<int>(i)).contains(position))
+                                {
+                                    selected = static_cast<int>(i);
+                                    audio->toggleImage(i);
+                                    smooth[i] = 0.f;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -674,223 +684,171 @@ int main()
             }
         }
 
-        // ---------------- Update ----------------
-        for (auto& s : stars)
+        // UPDATE
+        for (auto& s : plankton)
         {
-            s.x -= s.drift * dt;
-            if (s.x < -5.f) { s.x = W + 5.f; s.y = frand(0, H); }
+            s.y -= s.drift * dt;
+            s.x += std::sin(t * 0.5f + s.phase) * 6.f * dt;
+            if (s.y < -5.f) { s.y = H + 5.f; s.x = rnd(0, W); }
         }
 
-        for (auto& p : planets)
         {
-            p.x -= p.speed * dt;
-            if (p.x < -250.f) p.x = W + 250.f;
-        }
-
-        satAngle += 0.35f * dt;
-
-        shootTimer -= dt;
-        if (shootTimer <= 0.f)
-        {
-            shooting.push_back({ sf::Vector2f(frand(W * 0.4f, W), frand(0.f, H * 0.35f)),
-                                 sf::Vector2f(-750.f, 380.f), 0.9f });
-            if (screen != Screen::Gallery)
-                playSound(whooshBuf, frand(0.9f, 1.2f), 35.f);
-            shootTimer = frand(2.5f, 5.f);
-        }
-        for (auto& s : shooting)
-        {
-            s.pos += s.vel * dt;
-            s.life -= dt;
-        }
-        shooting.erase(std::remove_if(shooting.begin(), shooting.end(),
-            [](const ShootingStar& s) { return s.life <= 0.f; }),
-            shooting.end());
-
-        pulseTimer -= dt;
-        if (pulseTimer <= 0.f)
-        {
-            const Star& s = stars[static_cast<std::size_t>(frand(0.f, static_cast<float>(stars.size()) - 0.01f))];
-            int k = static_cast<int>(frand(0.f, 4.99f));
-            pulses.push_back({ sf::Vector2f(s.x, s.y), 0.f, noteColors[k] });
-            if (screen != Screen::Gallery)
-                playSound(notes[static_cast<std::size_t>(k)], 1.f, 45.f);
-            pulseTimer = frand(0.7f, 1.6f);
-        }
-        for (auto& p : pulses) p.age += dt;
-        pulses.erase(std::remove_if(pulses.begin(), pulses.end(),
-            [](const Pulse& p) { return p.age > 1.2f; }),
-            pulses.end());
-
-        for (std::size_t idx = 0; idx < datasets.size(); ++idx)
-        {
-            float target = 0.f;
-            if (dsSounds[idx].getStatus() == sf::Sound::Playing)
+            sf::RectangleShape fade(sf::Vector2f(W, H));
+            fade.setFillColor(col(0, 0, 0, 16));
+            flowRT.draw(fade);
+            flowLines.clear();
+            for (auto& p : fp)
             {
-                std::size_t off = static_cast<std::size_t>(dsSounds[idx].getPlayingOffset().asSeconds() * SAMPLE_RATE);
-                target = std::clamp(rmsAt(datasets[idx].pcm, off, 4096) * datasets[idx].norm, 0.f, 1.f);
+                float ang = std::sin(p.x * 0.006f + t * 0.15f) * 2.2f
+                    + std::cos(p.y * 0.008f - t * 0.10f) * 2.2f
+                    + std::sin((p.x + p.y) * 0.004f + t * 0.07f) * 1.5f;
+                float nx = p.x + (std::cos(ang) * 70.f + 25.f) * dt;
+                float ny = p.y + std::sin(ang) * 70.f * dt;
+                float life01 = p.age / p.life;
+                int alpha = std::max(0, int(230.f * std::sin(3.14159265f * std::min(life01, 1.f))));
+                sf::Color c = tempColor(1.f - std::fabs(2.f * p.y / H - 1.f) + p.tv, alpha);
+                flowLines.append(sf::Vertex(sf::Vector2f(p.x, p.y), c));
+                flowLines.append(sf::Vertex(sf::Vector2f(nx, ny), c));
+                p.x = nx; p.y = ny; p.age += dt;
+                if (p.age > p.life || nx < -5.f || nx > W + 5.f || ny < -5.f || ny > H + 5.f) respawn(p);
             }
-            smooth[idx] += (target - smooth[idx]) * std::min(1.f, dt * 10.f);
+            flowRT.draw(flowLines);
+            flowRT.display();
+        }
+
+        for (std::size_t i = 0; i < datasets.size(); ++i)
+        {
+            pbs[i] = audio->state(i);
+            float target = pbs[i].playing ? std::clamp(pbs[i].level, 0.f, 1.f) : 0.f;
+            smooth[i] += (target - smooth[i]) * std::min(1.f, dt * 10.f);
         }
 
         auto mousePixel = sf::Mouse::getPosition(window);
-        sf::Vector2f mousePosition(
-            static_cast<float>(mousePixel.x),
-            static_cast<float>(mousePixel.y)
-        );
+        sf::Vector2f mousePosition(static_cast<float>(mousePixel.x), static_cast<float>(mousePixel.y));
 
         bool hover = screen == Screen::Start && startButton.getGlobalBounds().contains(mousePosition);
         startButton.setFillColor(hover ? sf::Color(40, 190, 195) : sf::Color(20, 145, 160));
         startButton.setScale(hover ? sf::Vector2f(1.05f, 1.05f) : sf::Vector2f(1.f, 1.f));
 
-        // ---------------- Draw ----------------
+        // DRAW
         window.clear();
 
-        float k = 0.5f + 0.5f * std::sin(t * 0.15f);
-        sf::Color top = col(int(14 + 16 * k), 6, int(44 + 20 * k));
-        sf::Color bottom = col(4, int(34 + 20 * k), int(66 - 10 * k));
-        bg[0].color = top;
-        bg[1].color = top;
-        bg[2].color = bottom;
-        bg[3].color = bottom;
-        window.draw(bg);
-
         auto glow = [&](float x, float y, float r, sf::Color c)
-        {
-            for (int idx = 0; idx < 5; ++idx)
             {
-                float rr = r * (1.f - idx * 0.18f);
-                sf::CircleShape g(rr, 64);
-                g.setOrigin(rr, rr);
-                g.setPosition(x, y);
-                g.setFillColor(col(c.r, c.g, c.b, 10));
-                window.draw(g);
-            }
-        };
-        glow(300.f + 60.f * std::sin(t * 0.2f), 200.f, 280.f, col(140, 60, 200));
-        glow(900.f + 50.f * std::cos(t * 0.17f), 520.f, 300.f, col(30, 170, 190));
-        glow(600.f, 380.f + 40.f * std::sin(t * 0.13f), 240.f, col(60, 80, 210));
+                for (int i = 0; i < 5; ++i)
+                {
+                    float rr = r * (1.f - i * 0.18f);
+                    sf::CircleShape g(rr, 64);
+                    g.setOrigin(rr, rr);
+                    g.setPosition(x, y);
+                    g.setFillColor(col(c.r, c.g, c.b, 10));
+                    window.draw(g);
+                }
+            };
 
-        for (const auto& s : stars)
+        bool photoBg = (screen == Screen::Start && hasBgStart) || (screen == Screen::Workspace && hasBgWelcome);
+        if (photoBg && screen == Screen::Start)
         {
-            float a = 0.5f + 0.5f * std::sin(t * s.twinkle + s.phase);
-            dot.setRadius(s.r);
-            dot.setOrigin(s.r, s.r);
-            dot.setPosition(s.x, s.y);
-            dot.setFillColor(col(255, 255, 255, int(70 + 185 * a)));
-            window.draw(dot);
+            sf::RectangleShape base(sf::Vector2f(W, H));
+            base.setFillColor(col(28, 30, 34));
+            window.draw(base);
+
+            auto ts = bgStartTex.getSize();
+            float sc = std::min(W / static_cast<float>(ts.x), H / static_cast<float>(ts.y));
+            sf::Sprite spr(bgStartTex);
+            spr.setScale(sc, sc);
+            spr.setPosition((W - ts.x * sc) / 2.f, (H - ts.y * sc) / 2.f);
+            window.draw(spr);
         }
-
-        for (const auto& p : planets)
+        else if (photoBg)
         {
-            if (p.ring)
-            {
-                float rr = p.r * 1.8f;
-                sf::CircleShape ring(rr, 80);
-                ring.setOrigin(rr, rr);
-                ring.setPosition(p.x, p.y);
-                ring.setScale(1.f, 0.28f);
-                ring.setRotation(p.tilt);
-                ring.setFillColor(sf::Color::Transparent);
-                ring.setOutlineThickness(4.f);
-                ring.setOutlineColor(col(230, 200, 150, 150));
-                window.draw(ring);
-            }
-
-            sf::CircleShape body(p.r, 64);
-            body.setOrigin(p.r, p.r);
-            body.setPosition(p.x, p.y);
-            body.setFillColor(col(p.color.r, p.color.g, p.color.b, 215));
-            window.draw(body);
-
-            sf::CircleShape shade(p.r * 0.6f, 48);
-            shade.setOrigin(p.r * 0.6f, p.r * 0.6f);
-            shade.setPosition(p.x - p.r * 0.25f, p.y - p.r * 0.25f);
-            shade.setFillColor(col(255, 255, 255, 40));
+            drawCover(window, bgWelcomeTex, sf::Vector2f(0.f, 0.f), sf::Vector2f(W, H));
+            sf::RectangleShape shade(sf::Vector2f(W, H));
+            shade.setFillColor(col(0, 10, 25, 120));
             window.draw(shade);
         }
-
-        // Satellite
+        else
         {
-            float sx = W / 2.f + 520.f * std::cos(satAngle);
-            float sy = H / 2.f + 290.f * std::sin(satAngle);
-
-            sf::RectangleShape sBody(sf::Vector2f(22.f, 12.f));
-            sBody.setOrigin(11.f, 6.f);
-            sBody.setPosition(sx, sy);
-            sBody.setRotation((satAngle + PI / 2.f) * 180.f / PI);
-            sBody.setFillColor(col(220, 225, 235));
-            window.draw(sBody);
-
-            for (int side = -1; side <= 1; side += 2)
+            float k = 0.5f + 0.5f * std::sin(t * 0.2f);
+            sf::Color top, bottom;
+            if (screen == Screen::Start)
             {
-                sf::RectangleShape panel(sf::Vector2f(18.f, 8.f));
-                panel.setOrigin(9.f, 4.f);
-                float off = 20.f * side;
-                panel.setPosition(sx + off * std::cos(satAngle + PI / 2.f),
-                                    sy + off * std::sin(satAngle + PI / 2.f));
-                panel.setRotation((satAngle + PI / 2.f) * 180.f / PI);
-                panel.setFillColor(col(60, 140, 230));
-                window.draw(panel);
+                top = col(6, 24, 48);
+                bottom = col(10, int(80 + 24 * k), int(104 + 10 * k));
             }
+            else if (screen == Screen::Workspace)
+            {
+                top = col(8, 30, 56);
+                bottom = col(14, int(100 + 20 * k), int(122 + 8 * k));
+            }
+            else
+            {
+                top = col(4, 16, 32);
+                bottom = col(6, int(40 + 10 * k), int(62 + 8 * k));
+            }
+            bg[0].color = top; bg[1].color = top;
+            bg[2].color = bottom; bg[3].color = bottom;
+            window.draw(bg);
+
+            if (screen == Screen::Start)
+            {
+                glow(300.f + 60.f * std::sin(t * 0.2f), 200.f, 280.f, col(40, 200, 200));
+                glow(920.f + 50.f * std::cos(t * 0.17f), 560.f, 300.f, col(30, 120, 210));
+            }
+            else if (screen == Screen::Workspace)
+            {
+                glow(W / 2.f + 80.f * std::sin(t * 0.15f), H + 60.f, 420.f, col(255, 154, 92));
+                glow(200.f, 120.f, 260.f, col(40, 200, 200));
+            }
+            else
+            {
+                glow(1000.f + 40.f * std::sin(t * 0.18f), 120.f, 300.f, col(40, 200, 200));
+            }
+
+            sf::Sprite flowSpr(flowRT.getTexture());
+            flowSpr.setColor(col(255, 255, 255, screen == Screen::Gallery ? 90 : 255));
+            sf::RenderStates add;
+            add.blendMode = sf::BlendAdd;
+            window.draw(flowSpr, add);
         }
 
-        for (const auto& s : shooting)
-        {
-            float len = 130.f;
-            sf::RectangleShape trail(sf::Vector2f(len, 2.5f));
-            trail.setOrigin(len, 1.25f);
-            trail.setPosition(s.pos);
-            trail.setRotation(std::atan2(s.vel.y, s.vel.x) * 180.f / PI);
-            trail.setFillColor(col(255, 255, 255, int(255 * (s.life / 0.9f))));
-            window.draw(trail);
-        }
+        if (!(screen == Screen::Start && hasBgStart))
+            for (const auto& s : plankton)
+            {
+                float a = 0.5f + 0.5f * std::sin(t * s.twinkle + s.phase);
+                dot.setRadius(s.r);
+                dot.setOrigin(s.r, s.r);
+                dot.setPosition(s.x, s.y);
+                dot.setFillColor(col(190, 245, 240, int(40 + 110 * a)));
+                window.draw(dot);
+            }
 
-        for (const auto& p : pulses)
-        {
-            float prog = p.age / 1.2f;
-            float r = 6.f + prog * 70.f;
-            sf::CircleShape ring(r, 48);
-            ring.setOrigin(r, r);
-            ring.setPosition(p.pos);
-            ring.setFillColor(sf::Color::Transparent);
-            ring.setOutlineThickness(2.f);
-            ring.setOutlineColor(col(p.color.r, p.color.g, p.color.b, int(230 * (1.f - prog))));
-            window.draw(ring);
-
-            dot.setRadius(3.f);
-            dot.setOrigin(3.f, 3.f);
-            dot.setPosition(p.pos);
-            dot.setFillColor(col(p.color.r, p.color.g, p.color.b, int(255 * (1.f - prog))));
-            window.draw(dot);
-        }
-
-        // Screens
+        // SCREENS
         if (screen == Screen::Start)
         {
-            centerText(title, W / 2.f, 230.f + 6.f * std::sin(t * 1.5f));
-            window.draw(title);
-            window.draw(subtitle);
+            if (!hasBgStart)
+            {
+                centerText(title, W / 2.f, 230.f + 6.f * std::sin(t * 1.5f));
+                window.draw(title);
+                window.draw(subtitle);
+            }
             window.draw(startButton);
             window.draw(buttonText);
         }
         else if (screen == Screen::Workspace)
         {
             window.draw(welcome);
-            window.draw(para1);
-            window.draw(para2);
-            window.draw(para3);
 
             const int barCount = 56;
-            for (int idx = 0; idx < barCount; ++idx)
+            for (int i = 0; i < barCount; ++i)
             {
-                float wave = (0.5f + 0.5f * std::sin(t * 3.f + idx * 0.35f))
-                    * (0.6f + 0.4f * std::sin(t * 1.3f + idx * 0.12f));
+                float wave = (0.5f + 0.5f * std::sin(t * 3.f + i * 0.35f))
+                    * (0.6f + 0.4f * std::sin(t * 1.3f + i * 0.12f));
                 float h = 14.f + 80.f * wave;
                 sf::RectangleShape bar(sf::Vector2f(10.f, h));
                 bar.setOrigin(5.f, h / 2.f);
-                bar.setPosition(208.f + idx * 14.f, 400.f);
-                bar.setFillColor(col(40 + idx * 2, 190 - idx, 200, int(120 + 120 * wave)));
+                bar.setPosition(208.f + i * 14.f, 400.f);
+                bar.setFillColor(col(40 + i * 2, 190 - i, 200, int(120 + 120 * wave)));
                 window.draw(bar);
             }
 
@@ -901,115 +859,172 @@ int main()
             card.setPosition(cardCX, cardCY);
             card.setFillColor(col(255, 255, 255, cardHover ? 40 : 18));
             card.setOutlineThickness(cardHover ? 2.5f : 1.5f);
-            card.setOutlineColor(col(90, 220, 220, cardHover ? 255 : 140));
+            card.setOutlineColor(col(95, 224, 208, cardHover ? 255 : 140));
             window.draw(card);
 
             sf::Text ct; ct.setFont(font); ct.setString("NASA DATA"); ct.setCharacterSize(28);
-            ct.setFillColor(sf::Color(90, 220, 220));
+            ct.setFillColor(sf::Color(95, 224, 208));
             centerText(ct, cardCX, cardCY - 15.f);
             window.draw(ct);
 
             sf::Text ci; ci.setFont(font); ci.setString("Click to explore"); ci.setCharacterSize(18);
-            ci.setFillColor(sf::Color(190, 200, 220));
+            ci.setFillColor(sf::Color(210, 228, 235));
             centerText(ci, cardCX, cardCY + 25.f);
             window.draw(ci);
 
             hint.setString("ESC: back    M: mute");
-            centerText(hint, W / 2.f, 715.f);
+            centerText(hint, W / 2.f, 722.f);
             window.draw(hint);
         }
-        else // Gallery
+        else // GALLERY
         {
             sf::Text gt; gt.setFont(font); gt.setString("NASA EARTH DATA"); gt.setCharacterSize(34);
             gt.setFillColor(sf::Color::White);
-            centerText(gt, W / 2.f, 45.f);
+            centerText(gt, W / 2.f, 38.f);
             window.draw(gt);
 
-            sf::Text gs; gs.setFont(font); gs.setString("Click any image to hear what the data sounds like"); gs.setCharacterSize(17);
-            gs.setFillColor(sf::Color(90, 220, 220));
-            centerText(gs, W / 2.f, 80.f);
+            std::string sub = "Click any image to view it full screen";
+            if (!datasets.empty() && datasets.size() < static_cast<std::size_t>(MAX_IMAGES))
+                sub += "    (" + std::to_string(datasets.size()) + " of " + std::to_string(MAX_IMAGES) + " images found)";
+            sf::Text gs; gs.setFont(font); gs.setString(sub); gs.setCharacterSize(17);
+            gs.setFillColor(sf::Color(95, 224, 208));
+            centerText(gs, W / 2.f, 72.f);
             window.draw(gs);
 
-            for (std::size_t idx = 0; idx < datasets.size(); ++idx)
+            if (datasets.empty())
             {
-                Dataset& d = datasets[idx];
-                sf::FloatRect r = galleryRect(static_cast<int>(idx));
+                sf::Text m1; m1.setFont(font); m1.setString("No images found"); m1.setCharacterSize(30);
+                m1.setFillColor(sf::Color(255, 220, 130));
+                centerText(m1, W / 2.f, 300.f);
+                window.draw(m1);
+
+                sf::Text m2;
+                m2.setFont(font);
+                m2.setString("Put your NASA images (.png / .jpg) in the 'Data' folder,");
+                m2.setCharacterSize(20);
+
+                sf::Text m3;
+                m3.setFont(font);
+                m3.setString("then build and run again.");
+                m3.setCharacterSize(20);
+                m2.setFillColor(sf::Color(210, 228, 235));
+                m3.setFillColor(sf::Color(210, 228, 235));
+                centerText(m2, W / 2.f, 360.f);
+                centerText(m3, W / 2.f, 392.f);
+                window.draw(m2);
+                window.draw(m3);
+            }
+
+            for (std::size_t i = 0; i < datasets.size(); ++i)
+            {
+                Dataset& d = datasets[i];
+                sf::FloatRect r = galleryRect(static_cast<int>(i));
                 bool hov = r.contains(mousePosition);
-                bool playing = dsSounds[idx].getStatus() == sf::Sound::Playing;
-                float a = smooth[idx];
+                bool open = false;
+                bool playing = pbs[i].playing;
+                float a = smooth[i];
 
                 sf::RectangleShape gcard(sf::Vector2f(r.width, r.height));
                 gcard.setPosition(r.left, r.top);
-                gcard.setFillColor(col(255, 255, 255, (hov || playing) ? 34 : 18));
-                gcard.setOutlineThickness(playing ? 2.5f : 1.5f);
-                gcard.setOutlineColor(playing ? col(130, 255, 230, int(140 + 115 * a))
-                    : col(90, 220, 220, hov ? 220 : 120));
+                gcard.setFillColor(col(255, 255, 255, (hov || open || playing) ? 34 : 18));
+                gcard.setOutlineThickness((open || playing) ? 2.5f : 1.5f);
+                gcard.setOutlineColor((open || playing) ? col(130, 255, 230, int(170 + 85 * a))
+                    : col(95, 224, 208, hov ? 220 : 120));
                 window.draw(gcard);
 
                 float ix = r.left + 10.f;
                 float iy = r.top + 10.f;
-                if (d.hasTex)
-                {
-                    sf::Sprite sp(d.tex);
-                    auto ts = d.tex.getSize();
-                    float sc = std::max(320.f / ts.x, 140.f / ts.y);
-                    int cw = std::min(static_cast<int>(320.f / sc), static_cast<int>(ts.x));
-                    int ch = std::min(static_cast<int>(140.f / sc), static_cast<int>(ts.y));
-                    sp.setTextureRect(sf::IntRect((static_cast<int>(ts.x) - cw) / 2,
-                                                    (static_cast<int>(ts.y) - ch) / 2, cw, ch));
-                    sp.setScale(sc, sc);
-                    sp.setPosition(ix, iy);
-                    window.draw(sp);
-                }
-                else
-                {
-                    drawThumb(window, static_cast<int>(idx), ix, iy, 320.f, 140.f, d.c1, d.c2, t);
-                }
+                const float imgW = CARD_W - 20.f, imgH = 130.f;
+                drawCover(window, d.tex, sf::Vector2f(ix, iy), sf::Vector2f(imgW, imgH));
 
                 if (playing)
                 {
-                    sf::RectangleShape flash(sf::Vector2f(320.f, 140.f));
+                    sf::RectangleShape flash(sf::Vector2f(imgW, imgH));
                     flash.setPosition(ix, iy);
-                    flash.setFillColor(col(255, 255, 255, int(70 * a)));
+                    flash.setFillColor(col(255, 255, 255, int(60 * a)));
                     window.draw(flash);
+
+                    float prog = std::clamp(pbs[i].progress, 0.f, 1.f);
+                    sf::RectangleShape line(sf::Vector2f(2.5f, imgH));
+                    line.setPosition(ix + prog * imgW, iy);
+                    line.setFillColor(col(255, 255, 255, 220));
+                    window.draw(line);
                 }
 
-                sf::Text nm; nm.setFont(font); nm.setString(d.name); nm.setCharacterSize(19);
-                nm.setFillColor(sf::Color::White);
-                centerText(nm, r.left + r.width / 2.f, r.top + 172.f);
+                sf::Text nm; nm.setFont(font); nm.setString(d.name); nm.setCharacterSize(18);
+                nm.setFillColor(open ? sf::Color(255, 220, 130) : sf::Color::White);
+                fitText(nm, CARD_W - 20.f);
+                centerText(nm, r.left + r.width / 2.f, r.top + 163.f);
                 window.draw(nm);
 
-                int level = a < 0.33f ? 0 : (a < 0.66f ? 1 : 2);
-                std::string cap = playing ? d.caps[level] : std::string("Click to listen");
-                sf::Color capCol = !playing ? col(150, 160, 180)
-                    : (level == 0 ? col(150, 190, 230)
-                        : (level == 1 ? col(90, 220, 220) : col(255, 220, 130)));
-                sf::Text cp; cp.setFont(font); cp.setString(cap); cp.setCharacterSize(14);
-                cp.setFillColor(capCol);
-                centerText(cp, r.left + r.width / 2.f, r.top + 202.f);
+                sf::Text cp; cp.setFont(font); cp.setString("Click to view"); cp.setCharacterSize(14);
+                cp.setFillColor(col(150, 175, 190));
+                cp.setPosition(r.left + 12.f, r.top + 183.f);
                 window.draw(cp);
 
-                const int nb = 28;
-                float baseY = r.top + 248.f;
+                const int nb = 22;
+                float baseY = r.top + 255.f;
+                float startX = r.left + (CARD_W - nb * 11.f) / 2.f + 5.5f;
                 for (int b = 0; b < nb; ++b)
                 {
                     float bh = 3.f;
                     if (playing)
                     {
-                        std::size_t off = static_cast<std::size_t>(dsSounds[idx].getPlayingOffset().asSeconds() * SAMPLE_RATE);
-                        float v = rmsAt(d.pcm, off + static_cast<std::size_t>(b) * 1100, 700) * d.norm;
-                        bh = 3.f + 34.f * std::clamp(v, 0.f, 1.f);
+                        float v = (static_cast<std::size_t>(b) < pbs[i].wave.size()) ? pbs[i].wave[b] : a;
+                        bh = 3.f + 30.f * std::clamp(v, 0.f, 1.f);
                     }
-                    sf::RectangleShape bar(sf::Vector2f(7.f, bh));
-                    bar.setOrigin(3.5f, bh / 2.f);
-                    bar.setPosition(r.left + 21.5f + b * 11.f, baseY);
-                    bar.setFillColor(col(40 + b * 4, 200 - b * 3, 210, playing ? 220 : 90));
+                    sf::RectangleShape bar(sf::Vector2f(6.f, bh));
+                    bar.setOrigin(3.f, bh / 2.f);
+                    bar.setPosition(startX + b * 11.f, baseY);
+                    bar.setFillColor(col(40 + b * 5, 200 - b * 4, 210, playing ? 220 : 90));
                     window.draw(bar);
                 }
             }
 
-            hint.setString("Click an image to listen    ESC: back    M: mute");
-            centerText(hint, W / 2.f, 715.f);
+            if (selected >= 0 && selected < static_cast<int>(datasets.size()))
+            {
+                Dataset& d = datasets[static_cast<std::size_t>(selected)];
+
+                sf::RectangleShape dim(sf::Vector2f(W, H));
+                dim.setFillColor(col(2, 10, 22, 240));
+                window.draw(dim);
+
+                sf::Text fn; fn.setFont(font); fn.setString(d.name); fn.setCharacterSize(34);
+                fn.setFillColor(sf::Color(255, 220, 130));
+                centerText(fn, W / 2.f, 42.f);
+                window.draw(fn);
+
+                const float maxW = W - 120.f, maxH = 520.f;
+                auto ts = d.tex.getSize();
+                float sc = std::min(maxW / static_cast<float>(ts.x), maxH / static_cast<float>(ts.y));
+                float iw = ts.x * sc, ih = ts.y * sc;
+                float ix = (W - iw) / 2.f, iy = 82.f + (maxH - ih) / 2.f;
+
+                sf::Sprite big(d.tex);
+                big.setScale(sc, sc);
+                big.setPosition(ix, iy);
+                window.draw(big);
+
+                sf::RectangleShape frame(sf::Vector2f(iw, ih));
+                frame.setPosition(ix, iy);
+                frame.setFillColor(sf::Color::Transparent);
+                frame.setOutlineThickness(2.f);
+                frame.setOutlineColor(col(95, 224, 208, 200));
+                window.draw(frame);
+
+                std::string cap = d.desc.empty() ? std::string("No caption yet") : d.desc;
+                sf::Text fc; fc.setFont(font); fc.setString(wrapText(cap, font, 24, W - 240.f)); fc.setCharacterSize(24);
+                fc.setFillColor(col(210, 235, 240));
+                centerText(fc, W / 2.f, 655.f);
+                window.draw(fc);
+
+                hint.setString("Click anywhere or press ESC to close    M: mute");
+            }
+            else
+            {
+                hint.setString("Click an image to view it    ESC: back    M: mute");
+            }
+            centerText(hint, W / 2.f, 722.f);
             window.draw(hint);
         }
 
